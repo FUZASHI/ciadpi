@@ -1,0 +1,3 @@
+[submodule "ByeByeDPI"]
+	path = ByeByeDPI
+	url = https://github.com/romanvht/ByeByeDPI.git

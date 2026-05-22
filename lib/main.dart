@@ -51,7 +51,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   final ScrollController _logScrollController = ScrollController();
   final TextEditingController _customArgsController = TextEditingController();
 
-  int _selectedPresetIndex = 1; // Default: Russia (Aggressive)
+  int _selectedPresetIndex = 0; // Default: Russia (Light)
   bool _useCustomArgs = false;
   int _port = 1080;
 

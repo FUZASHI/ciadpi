@@ -23,14 +23,21 @@ class ProxyManager {
   Stream<String> get logStream => _logController.stream;
   int get port => _port;
 
+  bool get _isWindows => Platform.isWindows;
+  bool get _isMacOS => Platform.isMacOS;
+
   void _setStatus(ProxyStatus s) {
     _status = s;
     _statusController.add(s);
   }
 
   void _log(String message) {
-    _logController.add('[${DateTime.now().toIso8601String().substring(11, 19)}] $message');
+    _logController.add(
+        '[${DateTime.now().toIso8601String().substring(11, 19)}] $message');
   }
+
+  String get _assetName => _isWindows ? 'assets/ciadpi.exe' : 'assets/ciadpi_mac';
+  String get _binaryName => _isWindows ? 'ciadpi.exe' : 'ciadpi_mac';
 
   Future<String> _extractBinary() async {
     if (_binaryPath != null) {
@@ -39,15 +46,17 @@ class ProxyManager {
     }
 
     final dir = await getApplicationSupportDirectory();
-    final targetPath = '${dir.path}/ciadpi_mac';
+    final targetPath = '${dir.path}${Platform.pathSeparator}$_binaryName';
     final file = File(targetPath);
 
-    _log('Extracting ciadpi binary...');
-    final data = await rootBundle.load('assets/ciadpi_mac');
+    _log('Extracting $_binaryName...');
+    final data = await rootBundle.load(_assetName);
     await file.writeAsBytes(data.buffer.asUint8List(), flush: true);
 
-    // Make executable
-    await Process.run('chmod', ['+x', targetPath]);
+    // Make executable (macOS/Linux only)
+    if (!_isWindows) {
+      await Process.run('chmod', ['+x', targetPath]);
+    }
     _log('Binary extracted to $targetPath');
 
     _binaryPath = targetPath;
@@ -58,7 +67,8 @@ class ProxyManager {
     required List<String> args,
     int port = 1080,
   }) async {
-    if (_status == ProxyStatus.connected || _status == ProxyStatus.connecting) {
+    if (_status == ProxyStatus.connected ||
+        _status == ProxyStatus.connecting) {
       _log('Proxy already running, stopping first...');
       await stop();
     }
@@ -71,7 +81,7 @@ class ProxyManager {
 
       // Build full argument list
       final fullArgs = ['-p', port.toString(), '-x', '1', ...args];
-      _log('Starting: ciadpi ${fullArgs.join(' ')}');
+      _log('Starting: $_binaryName ${fullArgs.join(' ')}');
 
       _process = await Process.start(binaryPath, fullArgs);
 
@@ -103,12 +113,9 @@ class ProxyManager {
       // Wait briefly to check it doesn't immediately crash
       await Future.delayed(const Duration(milliseconds: 500));
 
-      final exitCode = _process?.exitCode;
-      // Check if process is still alive (exitCode future hasn't completed)
-      bool alive = true;
+      // Check if process is still alive
       _process!.exitCode.then((code) {
         if (_status == ProxyStatus.connecting) {
-          alive = false;
           _log('Process exited during startup with code $code');
           _setStatus(ProxyStatus.error);
         }
@@ -131,11 +138,25 @@ class ProxyManager {
     _log('Stopping proxy...');
 
     if (_process != null) {
-      _process!.kill(ProcessSignal.sigterm);
-      try {
-        await _process!.exitCode.timeout(const Duration(seconds: 3));
-      } catch (_) {
-        _process!.kill(ProcessSignal.sigkill);
+      if (_isWindows) {
+        // Windows: kill() sends SIGTERM equivalent
+        _process!.kill();
+        try {
+          await _process!.exitCode.timeout(const Duration(seconds: 3));
+        } catch (_) {
+          // Force kill via taskkill as fallback
+          try {
+            await Process.run('taskkill', ['/F', '/PID', '${_process!.pid}']);
+          } catch (_) {}
+        }
+      } else {
+        // macOS/Linux
+        _process!.kill(ProcessSignal.sigterm);
+        try {
+          await _process!.exitCode.timeout(const Duration(seconds: 3));
+        } catch (_) {
+          _process!.kill(ProcessSignal.sigkill);
+        }
       }
       _process = null;
     }
@@ -145,21 +166,98 @@ class ProxyManager {
     _log('Proxy stopped');
   }
 
+  // ---------- System proxy configuration ----------
+
   Future<void> _enableSystemProxy(int port) async {
+    if (_isWindows) {
+      await _enableWindowsProxy(port);
+    } else if (_isMacOS) {
+      await _enableMacProxy(port);
+    }
+  }
+
+  Future<void> _disableSystemProxy() async {
+    if (_isWindows) {
+      await _disableWindowsProxy();
+    } else if (_isMacOS) {
+      await _disableMacProxy();
+    }
+  }
+
+  // --- macOS ---
+
+  Future<void> _enableMacProxy(int port) async {
     _log('Configuring system SOCKS proxy on Wi-Fi...');
     await Process.run('networksetup', [
-      '-setsocksfirewallproxy', 'Wi-Fi', '127.0.0.1', port.toString(),
+      '-setsocksfirewallproxy',
+      'Wi-Fi',
+      '127.0.0.1',
+      port.toString(),
     ]);
     await Process.run('networksetup', [
-      '-setsocksfirewallproxystate', 'Wi-Fi', 'on',
+      '-setsocksfirewallproxystate',
+      'Wi-Fi',
+      'on',
     ]);
     _log('System proxy enabled');
   }
 
-  Future<void> _disableSystemProxy() async {
+  Future<void> _disableMacProxy() async {
     _log('Disabling system SOCKS proxy...');
     await Process.run('networksetup', [
-      '-setsocksfirewallproxystate', 'Wi-Fi', 'off',
+      '-setsocksfirewallproxystate',
+      'Wi-Fi',
+      'off',
+    ]);
+    _log('System proxy disabled');
+  }
+
+  // --- Windows ---
+
+  Future<void> _enableWindowsProxy(int port) async {
+    _log('Configuring system proxy on Windows...');
+    // Windows doesn't have native SOCKS proxy system-wide setting via netsh.
+    // We use the Internet Settings registry to set a proxy server.
+    // Most browsers respect this. For SOCKS specifically, users may need
+    // to configure their browser manually, but we set the general proxy.
+    //
+    // Alternative: set SOCKS proxy via registry for apps that support it.
+    // The most universal approach is setting ProxyServer with socks= prefix.
+    await Process.run('reg', [
+      'add',
+      r'HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings',
+      '/v', 'ProxyEnable',
+      '/t', 'REG_DWORD',
+      '/d', '1',
+      '/f',
+    ]);
+    await Process.run('reg', [
+      'add',
+      r'HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings',
+      '/v', 'ProxyServer',
+      '/t', 'REG_SZ',
+      '/d', 'socks=127.0.0.1:$port',
+      '/f',
+    ]);
+    _log('System proxy enabled (socks=127.0.0.1:$port)');
+    _log('Tip: Configure your browser to use SOCKS5 proxy 127.0.0.1:$port');
+  }
+
+  Future<void> _disableWindowsProxy() async {
+    _log('Disabling system proxy...');
+    await Process.run('reg', [
+      'add',
+      r'HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings',
+      '/v', 'ProxyEnable',
+      '/t', 'REG_DWORD',
+      '/d', '0',
+      '/f',
+    ]);
+    await Process.run('reg', [
+      'delete',
+      r'HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings',
+      '/v', 'ProxyServer',
+      '/f',
     ]);
     _log('System proxy disabled');
   }

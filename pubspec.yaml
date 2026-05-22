@@ -1,5 +1,5 @@
 name: ciadpi
-description: "ByeByeDPI macOS - DPI bypass client"
+description: "ByeByeDPI - DPI bypass client for macOS & Windows"
 publish_to: 'none'
 
 version: 1.0.0+1
@@ -25,4 +25,4 @@ flutter:
 
   assets:
     - assets/ciadpi_mac
-
+    - assets/ciadpi.exe

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
@@ -234,7 +235,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
               ),
               const SizedBox(height: 6),
               Text(
-                'DPI Bypass for macOS',
+                'DPI Bypass for ${Platform.isMacOS ? 'macOS' : Platform.isWindows ? 'Windows' : Platform.operatingSystem}',
                 style: GoogleFonts.inter(
                   fontSize: 12,
                   color: Colors.white.withValues(alpha: 0.4),
@@ -491,12 +492,20 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
           ),
           const SizedBox(height: 14),
           Text(
-            'macOS supported flags:\n'
-            '  --split, --disorder, --oob, --disoob\n'
-            '  --fake, --ttl, --tlsrec, --mod-http\n'
-            '  --auto, --timeout, --proto, --hosts\n'
-            '\nNot supported on macOS:\n'
-            '  --md5sig, --drop-sack, --transparent',
+            Platform.isWindows
+                ? 'Windows supported flags:\n'
+                  '  --split, --disorder, --oob, --disoob\n'
+                  '  --fake, --ttl, --tlsrec, --mod-http\n'
+                  '  --auto, --timeout, --proto, --hosts\n'
+                  '  --md5sig, --drop-sack\n'
+                  '\nNot supported on Windows:\n'
+                  '  --transparent'
+                : 'macOS supported flags:\n'
+                  '  --split, --disorder, --oob, --disoob\n'
+                  '  --fake, --ttl, --tlsrec, --mod-http\n'
+                  '  --auto, --timeout, --proto, --hosts\n'
+                  '\nNot supported on macOS:\n'
+                  '  --md5sig, --drop-sack, --transparent',
             style: GoogleFonts.jetBrainsMono(
               fontSize: 10,
               height: 1.6,

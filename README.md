@@ -57,7 +57,7 @@ Only `--transparent` (Linux TPROXY) is not available.
 
 1. **Clone with submodules:**
    ```bash
-   git clone --recurse-submodules <repo-url>
+   git clone <repo-url>
    cd ciadpi
    ```
 
@@ -135,7 +135,7 @@ Flutter UI ─► ProxyManager ─► ciadpi binary (SOCKS5 proxy)
 
 ## Credits
 
-- [ByeDPI](https://github.com/hufrea/byedpi) by hufrea — Core C proxy engine
+- [ByeDPI](https://github.com/hufrea/byedpi) by hufrea — Core C proxy engine (vendored with macOS patches)
 - [ByeByeDPI](https://github.com/romanvht/ByeByeDPI) by romanvht — Android client (inspiration)
 
 ## License

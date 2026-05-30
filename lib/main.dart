@@ -161,6 +161,12 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     }
   }
 
+  bool get _isMobile {
+    final width = WidgetsBinding.instance.platformDispatcher.views.first.physicalSize.width /
+        WidgetsBinding.instance.platformDispatcher.views.first.devicePixelRatio;
+    return Platform.isAndroid || Platform.isIOS || width < 600;
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -178,22 +184,191 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
             stops: [0.0, 0.3, 0.7, 1.0],
           ),
         ),
-        child: Row(
-          children: [
-            // Left panel: presets + config
-            SizedBox(
-              width: 320,
-              child: _buildLeftPanel(),
-            ),
-            // Divider
-            Container(
-              width: 1,
-              color: Colors.white.withValues(alpha: 0.06),
-            ),
-            // Right panel: orb + logs
-            Expanded(child: _buildRightPanel()),
-          ],
+        child: SafeArea(
+          child: _isMobile ? _buildMobileLayout() : _buildDesktopLayout(),
         ),
+      ),
+    );
+  }
+
+  Widget _buildDesktopLayout() {
+    return Row(
+      children: [
+        // Left panel: presets + config
+        SizedBox(
+          width: 320,
+          child: _buildLeftPanel(),
+        ),
+        // Divider
+        Container(
+          width: 1,
+          color: Colors.white.withValues(alpha: 0.06),
+        ),
+        // Right panel: orb + logs
+        Expanded(child: _buildRightPanel()),
+      ],
+    );
+  }
+
+  Widget _buildMobileLayout() {
+    return Column(
+      children: [
+        // Header + orb
+        _buildMobileHeader(),
+        const SizedBox(height: 8),
+        _buildConnectionOrb(),
+        const SizedBox(height: 12),
+        // Port config
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20),
+          child: _GlassCard(
+            child: Row(
+              children: [
+                Icon(Icons.lan_outlined,
+                    size: 16, color: Colors.white.withValues(alpha: 0.5)),
+                const SizedBox(width: 10),
+                Text('Port',
+                    style: GoogleFonts.inter(
+                        fontSize: 13, color: Colors.white.withValues(alpha: 0.7))),
+                const Spacer(),
+                SizedBox(
+                  width: 70,
+                  height: 32,
+                  child: TextField(
+                    controller: TextEditingController(text: '$_port'),
+                    onChanged: (v) => _port = int.tryParse(v) ?? 1080,
+                    style: GoogleFonts.jetBrainsMono(
+                        fontSize: 13, color: Colors.white),
+                    textAlign: TextAlign.center,
+                    keyboardType: TextInputType.number,
+                    decoration: InputDecoration(
+                      isDense: true,
+                      contentPadding:
+                          const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: BorderSide(
+                            color: Colors.white.withValues(alpha: 0.1)),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: BorderSide(
+                            color: Colors.white.withValues(alpha: 0.1)),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide:
+                            const BorderSide(color: Color(0xFF6C63FF)),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        // Presets header
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20),
+          child: Row(
+            children: [
+              Text(
+                'PRESETS',
+                style: GoogleFonts.inter(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.white.withValues(alpha: 0.35),
+                  letterSpacing: 1.5,
+                ),
+              ),
+              const Spacer(),
+              GestureDetector(
+                onTap: () => setState(() => _useCustomArgs = !_useCustomArgs),
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(6),
+                    color: _useCustomArgs
+                        ? const Color(0xFF6C63FF).withValues(alpha: 0.2)
+                        : Colors.white.withValues(alpha: 0.05),
+                    border: Border.all(
+                      color: _useCustomArgs
+                          ? const Color(0xFF6C63FF).withValues(alpha: 0.4)
+                          : Colors.white.withValues(alpha: 0.1),
+                    ),
+                  ),
+                  child: Text(
+                    'Custom',
+                    style: GoogleFonts.inter(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w600,
+                      color: _useCustomArgs
+                          ? const Color(0xFF6C63FF)
+                          : Colors.white.withValues(alpha: 0.5),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 8),
+        // Preset list or custom args
+        Expanded(
+          child: _useCustomArgs ? _buildCustomArgs() : _buildPresetList(),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildMobileHeader() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+      child: Row(
+        children: [
+          Container(
+            width: 32,
+            height: 32,
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                colors: [Color(0xFF6C63FF), Color(0xFF00D9FF)],
+              ),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: const Icon(Icons.shield_outlined, size: 18, color: Colors.white),
+          ),
+          const SizedBox(width: 10),
+          Text(
+            'ByeByeDPI',
+            style: GoogleFonts.inter(
+              fontSize: 18,
+              fontWeight: FontWeight.w700,
+              color: Colors.white,
+              letterSpacing: -0.5,
+            ),
+          ),
+          const Spacer(),
+          // Status pill
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(12),
+              color: _statusColor.withValues(alpha: 0.15),
+              border: Border.all(color: _statusColor.withValues(alpha: 0.3)),
+            ),
+            child: Text(
+              _statusText,
+              style: GoogleFonts.inter(
+                fontSize: 9,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 1,
+                color: _statusColor,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -235,7 +410,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
               ),
               const SizedBox(height: 6),
               Text(
-                'DPI Bypass for ${Platform.isMacOS ? 'macOS' : Platform.isWindows ? 'Windows' : Platform.operatingSystem}',
+                'DPI Bypass for ${Platform.isMacOS ? 'macOS' : Platform.isWindows ? 'Windows' : Platform.isAndroid ? 'Android' : Platform.operatingSystem}',
                 style: GoogleFonts.inter(
                   fontSize: 12,
                   color: Colors.white.withValues(alpha: 0.4),
@@ -492,7 +667,14 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
           ),
           const SizedBox(height: 14),
           Text(
-            Platform.isWindows
+            Platform.isAndroid
+                ? 'Android supported flags:\n'
+                  '  --split, --disorder, --oob, --disoob\n'
+                  '  --fake, --ttl, --tlsrec, --mod-http\n'
+                  '  --auto, --timeout, --proto, --hosts\n'
+                  '  --drop-sack\n'
+                  '\nNote: Traffic is routed via VPN tunnel.'
+                : Platform.isWindows
                 ? 'Windows supported flags:\n'
                   '  --split, --disorder, --oob, --disoob\n'
                   '  --fake, --ttl, --tlsrec, --mod-http\n'
@@ -602,7 +784,9 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
         // Subtitle
         Text(
           isConnected
-              ? 'SOCKS5 on 127.0.0.1:${_proxy.port}'
+              ? Platform.isAndroid
+                  ? 'VPN active — port ${_proxy.port}'
+                  : 'SOCKS5 on 127.0.0.1:${_proxy.port}'
               : isConnecting
                   ? 'Establishing connection...'
                   : 'Tap to connect',

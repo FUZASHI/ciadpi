@@ -21,6 +21,13 @@ class DpiPreset {
 class Presets {
   static const List<DpiPreset> all = [
     DpiPreset(
+      name: 'Default (ByeByeDPI)',
+      emoji: '⚡',
+      description: 'Upstream default preset.\nOOB + UDP fake + TLS record split.',
+      args: ['--oob', '1', '--udp-fake', '1', '--tlsrec', '-5+se'],
+      accentColor: Color(0xFFFFB300),
+    ),
+    DpiPreset(
       name: 'Russia (Light)',
       emoji: '🇷🇺',
       description: 'Disorder + TLS record fragmentation.\nGentle bypass for moderate DPI.',

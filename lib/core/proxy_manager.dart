@@ -11,7 +11,13 @@ class ProxyManager {
   factory ProxyManager() => _instance;
   ProxyManager._internal();
 
+  // Desktop (macOS/Windows) process
   Process? _process;
+
+  // Android MethodChannel
+  static const _channel = MethodChannel('com.digitalstorm.ciadpi/proxy');
+  bool _androidChannelInitialized = false;
+
   ProxyStatus _status = ProxyStatus.disconnected;
   final _statusController = StreamController<ProxyStatus>.broadcast();
   final _logController = StreamController<String>.broadcast();
@@ -25,6 +31,7 @@ class ProxyManager {
 
   bool get _isWindows => Platform.isWindows;
   bool get _isMacOS => Platform.isMacOS;
+  bool get _isAndroid => Platform.isAndroid;
 
   void _setStatus(ProxyStatus s) {
     _status = s;
@@ -36,6 +43,32 @@ class ProxyManager {
         '[${DateTime.now().toIso8601String().substring(11, 19)}] $message');
   }
 
+  void _initAndroidChannel() {
+    if (_androidChannelInitialized) return;
+    _androidChannelInitialized = true;
+
+    _channel.setMethodCallHandler((call) async {
+      if (call.method == 'onStatusChanged') {
+        final status = call.arguments as String;
+        switch (status) {
+          case 'connected':
+            _setStatus(ProxyStatus.connected);
+            _log('✓ Connected — VPN active, SOCKS5 on 127.0.0.1:$_port');
+            break;
+          case 'disconnected':
+            _setStatus(ProxyStatus.disconnected);
+            _log('Proxy stopped');
+            break;
+          case 'failed':
+            _setStatus(ProxyStatus.error);
+            _log('[ERR] VPN service failed');
+            break;
+        }
+      }
+    });
+  }
+
+  // Desktop binary helpers
   String get _assetName => _isWindows ? 'assets/ciadpi.exe' : 'assets/ciadpi_mac';
   String get _binaryName => _isWindows ? 'ciadpi.exe' : 'ciadpi_mac';
 
@@ -76,6 +109,31 @@ class ProxyManager {
     _setStatus(ProxyStatus.connecting);
     _port = port;
 
+    if (_isAndroid) {
+      await _startAndroid(args, port);
+    } else {
+      await _startDesktop(args, port);
+    }
+  }
+
+  Future<void> _startAndroid(List<String> args, int port) async {
+    try {
+      _initAndroidChannel();
+      _log('Starting VPN with: ${args.join(' ')}');
+
+      await _channel.invokeMethod('startVpn', {
+        'args': args,
+        'port': port,
+      });
+
+      // Status will be updated via the callback from native side
+    } catch (e) {
+      _log('[ERR] Error starting VPN: $e');
+      _setStatus(ProxyStatus.error);
+    }
+  }
+
+  Future<void> _startDesktop(List<String> args, int port) async {
     try {
       final binaryPath = await _extractBinary();
 
@@ -137,14 +195,30 @@ class ProxyManager {
   Future<void> stop() async {
     _log('Stopping proxy...');
 
+    if (_isAndroid) {
+      await _stopAndroid();
+    } else {
+      await _stopDesktop();
+    }
+  }
+
+  Future<void> _stopAndroid() async {
+    try {
+      await _channel.invokeMethod('stopVpn');
+      // Status will be updated via the callback from native side
+    } catch (e) {
+      _log('[ERR] Error stopping VPN: $e');
+      _setStatus(ProxyStatus.disconnected);
+    }
+  }
+
+  Future<void> _stopDesktop() async {
     if (_process != null) {
       if (_isWindows) {
-        // Windows: kill() sends SIGTERM equivalent
         _process!.kill();
         try {
           await _process!.exitCode.timeout(const Duration(seconds: 3));
         } catch (_) {
-          // Force kill via taskkill as fallback
           try {
             await Process.run('taskkill', ['/F', '/PID', '${_process!.pid}']);
           } catch (_) {}
@@ -166,7 +240,7 @@ class ProxyManager {
     _log('Proxy stopped');
   }
 
-  // ---------- System proxy configuration ----------
+  // ---------- System proxy configuration (desktop only) ----------
 
   Future<void> _enableSystemProxy(int port) async {
     if (_isWindows) {
@@ -216,13 +290,6 @@ class ProxyManager {
 
   Future<void> _enableWindowsProxy(int port) async {
     _log('Configuring system proxy on Windows...');
-    // Windows doesn't have native SOCKS proxy system-wide setting via netsh.
-    // We use the Internet Settings registry to set a proxy server.
-    // Most browsers respect this. For SOCKS specifically, users may need
-    // to configure their browser manually, but we set the general proxy.
-    //
-    // Alternative: set SOCKS proxy via registry for apps that support it.
-    // The most universal approach is setting ProxyServer with socks= prefix.
     await Process.run('reg', [
       'add',
       r'HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings',

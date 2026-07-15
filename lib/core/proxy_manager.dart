@@ -30,6 +30,7 @@ class ProxyManager {
   int _port = 1080;
   String? _originalGateway;
   String? _originalInterface;
+  String? _originalLocalIp;
 
   ProxyStatus get status => _status;
   ProxyMode get mode => _mode;
@@ -182,7 +183,19 @@ class ProxyManager {
       final binaryPath = await _extractBinary();
 
       // Build full argument list
-      final fullArgs = ['-p', port.toString(), '-x', '1', ...args];
+      final fullArgs = ['-p', port.toString(), '-x', '1'];
+      
+      // If VPN mode, get local IP to bind ciadpi to the real network interface.
+      // This prevents ciadpi's own traffic from entering the TUN and looping.
+      if (_isWindows && _mode == ProxyMode.vpn) {
+        await _saveDefaultGateway();
+        if (_originalLocalIp != null) {
+          fullArgs.addAll(['-I', _originalLocalIp!]);
+          _log('Binding proxy to $_originalLocalIp to prevent routing loop');
+        }
+      }
+      
+      fullArgs.addAll(args);
       _log('Starting: $_binaryName ${fullArgs.join(' ')}');
 
       _process = await Process.start(binaryPath, fullArgs);
@@ -305,10 +318,7 @@ class ProxyManager {
     // 1. Extract tun2socks + wintun
     final tun2socksPath = await _extractTun2socks();
 
-    // 2. Save current default gateway to prevent routing loop
-    await _saveDefaultGateway();
-
-    // 3. Start tun2socks
+    // 2. Start tun2socks
     _log('Launching tun2socks...');
     _tun2socksProcess = await Process.start(
       tun2socksPath,
@@ -371,6 +381,16 @@ class ProxyManager {
       if (iface.isNotEmpty) {
         _originalInterface = iface;
         _log('Current interface: $iface');
+        
+        // Get the local IP of that interface to bind ciadpi
+        final ipResult = await Process.run('powershell', [
+          '-Command',
+          "(Get-NetIPAddress -InterfaceAlias '$_originalInterface' -AddressFamily IPv4).IPAddress",
+        ]);
+        final ip = ipResult.stdout.toString().trim();
+        if (ip.isNotEmpty) {
+          _originalLocalIp = ip;
+        }
       }
     } catch (e) {
       _log('[WARN] Could not detect default gateway: $e');
@@ -393,16 +413,7 @@ class ProxyManager {
         'wintun', 'static', '1.1.1.1', 'validate=no',
       ]);
 
-      // 3. Add route for the SOCKS proxy itself via the REAL gateway
-      //    This prevents a routing loop (proxy traffic must NOT go through the TUN)
-      if (_originalGateway != null) {
-        await _runRoute('route', [
-          'add', '127.0.0.1', 'mask', '255.255.255.255',
-          _originalGateway!, 'metric', '1',
-        ]);
-      }
-
-      // 4. Add default route via the TUN adapter with lower metric
+      // 3. Add default route via the TUN adapter with lower metric
       await _runRoute('route', [
         'add', '0.0.0.0', 'mask', '128.0.0.0',
         '10.0.85.1', 'metric', '5',
@@ -458,17 +469,13 @@ class ProxyManager {
       // Remove our added routes
       await Process.run('route', ['delete', '0.0.0.0', 'mask', '128.0.0.0']);
       await Process.run('route', ['delete', '128.0.0.0', 'mask', '128.0.0.0']);
-      if (_originalGateway != null) {
-        await Process.run('route', [
-          'delete', '127.0.0.1', 'mask', '255.255.255.255',
-        ]);
-      }
       _log('Routes restored');
     } catch (e) {
       _log('[WARN] Could not fully restore routes: $e');
     }
     _originalGateway = null;
     _originalInterface = null;
+    _originalLocalIp = null;
   }
 
   // ---------- System proxy configuration (desktop only) ----------

@@ -312,7 +312,7 @@ class ProxyManager {
     _log('Launching tun2socks...');
     _tun2socksProcess = await Process.start(
       tun2socksPath,
-      ['-device', 'wintun', '-proxy', 'socks5://127.0.0.1:$port'],
+      ['--device', 'wintun', '--proxy', 'socks5://127.0.0.1:$port'],
       workingDirectory: _supportDir,
     );
 

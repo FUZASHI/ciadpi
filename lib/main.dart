@@ -4,6 +4,7 @@ import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:flutter/services.dart';
 
 import 'core/presets.dart';
 import 'core/proxy_manager.dart';
@@ -965,6 +966,34 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                   ),
                 ),
                 const Spacer(),
+                // COPY BUTTON
+                GestureDetector(
+                  onTap: () async {
+                    if (_logs.isNotEmpty) {
+                      await Clipboard.setData(ClipboardData(text: _logs.join('\n')));
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(
+                              'Logs copied to clipboard', 
+                              style: GoogleFonts.inter(color: Colors.white)
+                            ),
+                            backgroundColor: const Color(0xFF6C63FF),
+                            behavior: SnackBarBehavior.floating,
+                            duration: const Duration(seconds: 2),
+                          ),
+                        );
+                      }
+                    }
+                  },
+                  child: MouseRegion(
+                    cursor: SystemMouseCursors.click,
+                    child: Icon(Icons.copy_rounded,
+                        size: 14, color: Colors.white.withValues(alpha: 0.2)),
+                  ),
+                ),
+                const SizedBox(width: 16),
+                // DELETE BUTTON
                 GestureDetector(
                   onTap: () => setState(() => _logs.clear()),
                   child: MouseRegion(

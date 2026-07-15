@@ -412,6 +412,13 @@ class ProxyManager {
         '10.0.85.1', 'metric', '5',
       ]);
 
+      // 5. Block QUIC (UDP 443) to force browsers to fallback to TCP HTTPS
+      //    (byedpi has issues proxying QUIC UDP traffic with --udp-fake)
+      await _runRoute('powershell', [
+        '-Command',
+        'New-NetFirewallRule -DisplayName "ciadpi-Block-QUIC" -Direction Outbound -Action Block -Protocol UDP -RemotePort 443 -ErrorAction SilentlyContinue'
+      ]);
+
       _log('VPN routes configured — all traffic routed through TUN');
     } catch (e) {
       _log('[ERR] Failed to configure routes: $e');
@@ -463,6 +470,13 @@ class ProxyManager {
           'delete', '127.0.0.1', 'mask', '255.255.255.255',
         ]);
       }
+      
+      // Remove QUIC firewall block
+      await Process.run('powershell', [
+        '-Command',
+        'Remove-NetFirewallRule -DisplayName "ciadpi-Block-QUIC" -ErrorAction SilentlyContinue'
+      ]);
+      
       _log('Routes restored');
     } catch (e) {
       _log('[WARN] Could not fully restore routes: $e');

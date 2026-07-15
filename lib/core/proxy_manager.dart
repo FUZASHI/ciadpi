@@ -5,29 +5,39 @@ import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 
 enum ProxyStatus { disconnected, connecting, connected, error }
+enum ProxyMode { proxy, vpn }
 
 class ProxyManager {
   static final ProxyManager _instance = ProxyManager._internal();
   factory ProxyManager() => _instance;
   ProxyManager._internal();
 
-  // Desktop (macOS/Windows) process
+  // Desktop (macOS/Windows) processes
   Process? _process;
+  Process? _tun2socksProcess;
 
   // Android MethodChannel
   static const _channel = MethodChannel('com.digitalstorm.ciadpi/proxy');
   bool _androidChannelInitialized = false;
 
   ProxyStatus _status = ProxyStatus.disconnected;
+  ProxyMode _mode = ProxyMode.proxy;
   final _statusController = StreamController<ProxyStatus>.broadcast();
   final _logController = StreamController<String>.broadcast();
   String? _binaryPath;
+  String? _tun2socksPath;
+  String? _supportDir;
   int _port = 1080;
+  String? _originalGateway;
+  String? _originalInterface;
 
   ProxyStatus get status => _status;
+  ProxyMode get mode => _mode;
   Stream<ProxyStatus> get statusStream => _statusController.stream;
   Stream<String> get logStream => _logController.stream;
   int get port => _port;
+
+  set mode(ProxyMode m) => _mode = m;
 
   bool get _isWindows => Platform.isWindows;
   bool get _isMacOS => Platform.isMacOS;
@@ -72,14 +82,21 @@ class ProxyManager {
   String get _assetName => _isWindows ? 'assets/ciadpi.exe' : 'assets/ciadpi_mac';
   String get _binaryName => _isWindows ? 'ciadpi.exe' : 'ciadpi_mac';
 
+  Future<String> _getSupportDir() async {
+    if (_supportDir != null) return _supportDir!;
+    final dir = await getApplicationSupportDirectory();
+    _supportDir = dir.path;
+    return _supportDir!;
+  }
+
   Future<String> _extractBinary() async {
     if (_binaryPath != null) {
       final f = File(_binaryPath!);
       if (await f.exists()) return _binaryPath!;
     }
 
-    final dir = await getApplicationSupportDirectory();
-    final targetPath = '${dir.path}${Platform.pathSeparator}$_binaryName';
+    final dirPath = await _getSupportDir();
+    final targetPath = '$dirPath${Platform.pathSeparator}$_binaryName';
     final file = File(targetPath);
 
     _log('Extracting $_binaryName...');
@@ -95,6 +112,35 @@ class ProxyManager {
     _binaryPath = targetPath;
     return targetPath;
   }
+
+  Future<String> _extractTun2socks() async {
+    if (_tun2socksPath != null) {
+      final f = File(_tun2socksPath!);
+      if (await f.exists()) return _tun2socksPath!;
+    }
+
+    final dirPath = await _getSupportDir();
+    final tun2socksTarget = '$dirPath${Platform.pathSeparator}tun2socks.exe';
+    final wintunTarget = '$dirPath${Platform.pathSeparator}wintun.dll';
+
+    // Extract tun2socks.exe
+    _log('Extracting tun2socks.exe...');
+    final tun2socksData = await rootBundle.load('assets/tun2socks.exe');
+    await File(tun2socksTarget)
+        .writeAsBytes(tun2socksData.buffer.asUint8List(), flush: true);
+
+    // Extract wintun.dll (must be in same directory as tun2socks.exe)
+    _log('Extracting wintun.dll...');
+    final wintunData = await rootBundle.load('assets/wintun.dll');
+    await File(wintunTarget)
+        .writeAsBytes(wintunData.buffer.asUint8List(), flush: true);
+
+    _log('tun2socks + wintun extracted');
+    _tun2socksPath = tun2socksTarget;
+    return tun2socksTarget;
+  }
+
+  // ---------- Start / Stop ----------
 
   Future<void> start({
     required List<String> args,
@@ -125,8 +171,6 @@ class ProxyManager {
         'args': args,
         'port': port,
       });
-
-      // Status will be updated via the callback from native side
     } catch (e) {
       _log('[ERR] Error starting VPN: $e');
       _setStatus(ProxyStatus.error);
@@ -182,10 +226,19 @@ class ProxyManager {
       await Future.delayed(const Duration(milliseconds: 300));
       if (_status == ProxyStatus.error) return;
 
-      // Enable system proxy
-      await _enableSystemProxy(port);
+      // Enable system proxy or VPN mode
+      if (_isWindows && _mode == ProxyMode.vpn) {
+        await _startVpnMode(port);
+      } else {
+        await _enableSystemProxy(port);
+      }
+
       _setStatus(ProxyStatus.connected);
-      _log('✓ Connected — SOCKS5 proxy on 127.0.0.1:$port');
+      if (_mode == ProxyMode.vpn) {
+        _log('✓ Connected — VPN mode, all traffic routed via 127.0.0.1:$port');
+      } else {
+        _log('✓ Connected — SOCKS5 proxy on 127.0.0.1:$port');
+      }
     } catch (e) {
       _log('Error starting proxy: $e');
       _setStatus(ProxyStatus.error);
@@ -205,7 +258,6 @@ class ProxyManager {
   Future<void> _stopAndroid() async {
     try {
       await _channel.invokeMethod('stopVpn');
-      // Status will be updated via the callback from native side
     } catch (e) {
       _log('[ERR] Error stopping VPN: $e');
       _setStatus(ProxyStatus.disconnected);
@@ -213,6 +265,11 @@ class ProxyManager {
   }
 
   Future<void> _stopDesktop() async {
+    // Stop VPN mode first (if active)
+    if (_tun2socksProcess != null) {
+      await _stopVpnMode();
+    }
+
     if (_process != null) {
       if (_isWindows) {
         _process!.kill();
@@ -240,6 +297,180 @@ class ProxyManager {
     _log('Proxy stopped');
   }
 
+  // ---------- Windows VPN Mode (tun2socks) ----------
+
+  Future<void> _startVpnMode(int port) async {
+    _log('Starting VPN mode (tun2socks)...');
+
+    // 1. Extract tun2socks + wintun
+    final tun2socksPath = await _extractTun2socks();
+
+    // 2. Save current default gateway to prevent routing loop
+    await _saveDefaultGateway();
+
+    // 3. Start tun2socks
+    _log('Launching tun2socks...');
+    _tun2socksProcess = await Process.start(
+      tun2socksPath,
+      ['-device', 'wintun', '-proxy', 'socks5://127.0.0.1:$port'],
+      workingDirectory: _supportDir,
+    );
+
+    // Listen to tun2socks output
+    _tun2socksProcess!.stdout.transform(const SystemEncoding().decoder).listen(
+      (data) {
+        for (final line in data.split('\n')) {
+          if (line.trim().isNotEmpty) _log('[tun2socks] ${line.trim()}');
+        }
+      },
+    );
+    _tun2socksProcess!.stderr.transform(const SystemEncoding().decoder).listen(
+      (data) {
+        for (final line in data.split('\n')) {
+          if (line.trim().isNotEmpty) _log('[tun2socks] ${line.trim()}');
+        }
+      },
+    );
+
+    // Monitor tun2socks exit
+    _tun2socksProcess!.exitCode.then((code) {
+      if (_status == ProxyStatus.connected) {
+        _log('[ERR] tun2socks exited unexpectedly with code $code');
+        _setStatus(ProxyStatus.error);
+        _restoreRoutes();
+      }
+    });
+
+    // 4. Wait for TUN adapter to be created
+    _log('Waiting for wintun adapter...');
+    await Future.delayed(const Duration(seconds: 2));
+
+    // 5. Configure network routes
+    await _configureVpnRoutes(port);
+  }
+
+  Future<void> _saveDefaultGateway() async {
+    try {
+      // Get the current default gateway
+      final result = await Process.run('powershell', [
+        '-Command',
+        r"(Get-NetRoute -DestinationPrefix '0.0.0.0/0' | Sort-Object RouteMetric | Select-Object -First 1).NextHop",
+      ]);
+      final gateway = result.stdout.toString().trim();
+      if (gateway.isNotEmpty && gateway != '') {
+        _originalGateway = gateway;
+        _log('Current default gateway: $gateway');
+      }
+
+      // Get the interface index for the gateway
+      final ifResult = await Process.run('powershell', [
+        '-Command',
+        r"(Get-NetRoute -DestinationPrefix '0.0.0.0/0' | Sort-Object RouteMetric | Select-Object -First 1).InterfaceAlias",
+      ]);
+      final iface = ifResult.stdout.toString().trim();
+      if (iface.isNotEmpty) {
+        _originalInterface = iface;
+        _log('Current interface: $iface');
+      }
+    } catch (e) {
+      _log('[WARN] Could not detect default gateway: $e');
+    }
+  }
+
+  Future<void> _configureVpnRoutes(int port) async {
+    _log('Configuring VPN routes...');
+
+    try {
+      // 1. Set IP on the wintun adapter
+      await _runRoute('netsh', [
+        'interface', 'ip', 'set', 'address',
+        'wintun', 'static', '10.0.85.1', '255.255.255.0',
+      ]);
+
+      // 2. Set DNS on wintun adapter
+      await _runRoute('netsh', [
+        'interface', 'ip', 'set', 'dnsservers',
+        'wintun', 'static', '1.1.1.1', 'validate=no',
+      ]);
+
+      // 3. Add route for the SOCKS proxy itself via the REAL gateway
+      //    This prevents a routing loop (proxy traffic must NOT go through the TUN)
+      if (_originalGateway != null) {
+        await _runRoute('route', [
+          'add', '127.0.0.1', 'mask', '255.255.255.255',
+          _originalGateway!, 'metric', '1',
+        ]);
+      }
+
+      // 4. Add default route via the TUN adapter with lower metric
+      await _runRoute('route', [
+        'add', '0.0.0.0', 'mask', '128.0.0.0',
+        '10.0.85.1', 'metric', '5',
+      ]);
+      await _runRoute('route', [
+        'add', '128.0.0.0', 'mask', '128.0.0.0',
+        '10.0.85.1', 'metric', '5',
+      ]);
+
+      _log('VPN routes configured — all traffic routed through TUN');
+    } catch (e) {
+      _log('[ERR] Failed to configure routes: $e');
+      // Try to clean up on failure
+      await _stopVpnMode();
+      _setStatus(ProxyStatus.error);
+    }
+  }
+
+  Future<void> _runRoute(String cmd, List<String> args) async {
+    final result = await Process.run(cmd, args);
+    final stdout = result.stdout.toString().trim();
+    final stderr = result.stderr.toString().trim();
+    if (stdout.isNotEmpty) _log('[route] $stdout');
+    if (stderr.isNotEmpty && result.exitCode != 0) _log('[route ERR] $stderr');
+  }
+
+  Future<void> _stopVpnMode() async {
+    _log('Stopping VPN mode...');
+
+    // Restore routes first
+    await _restoreRoutes();
+
+    // Kill tun2socks
+    if (_tun2socksProcess != null) {
+      _tun2socksProcess!.kill();
+      try {
+        await _tun2socksProcess!.exitCode.timeout(const Duration(seconds: 3));
+      } catch (_) {
+        try {
+          await Process.run(
+              'taskkill', ['/F', '/PID', '${_tun2socksProcess!.pid}']);
+        } catch (_) {}
+      }
+      _tun2socksProcess = null;
+    }
+
+    _log('VPN mode stopped');
+  }
+
+  Future<void> _restoreRoutes() async {
+    _log('Restoring network routes...');
+    try {
+      // Remove our added routes
+      await Process.run('route', ['delete', '0.0.0.0', 'mask', '128.0.0.0']);
+      await Process.run('route', ['delete', '128.0.0.0', 'mask', '128.0.0.0']);
+      if (_originalGateway != null) {
+        await Process.run('route', [
+          'delete', '127.0.0.1', 'mask', '255.255.255.255',
+        ]);
+      }
+      _log('Routes restored');
+    } catch (e) {
+      _log('[WARN] Could not fully restore routes: $e');
+    }
+    _originalGateway = null;
+    _originalInterface = null;
+  }
+
   // ---------- System proxy configuration (desktop only) ----------
 
   Future<void> _enableSystemProxy(int port) async {
@@ -251,7 +482,7 @@ class ProxyManager {
   }
 
   Future<void> _disableSystemProxy() async {
-    if (_isWindows) {
+    if (_isWindows && _mode != ProxyMode.vpn) {
       await _disableWindowsProxy();
     } else if (_isMacOS) {
       await _disableMacProxy();

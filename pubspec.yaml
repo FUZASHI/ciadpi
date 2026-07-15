@@ -26,3 +26,5 @@ flutter:
   assets:
     - assets/ciadpi_mac
     - assets/ciadpi.exe
+    - assets/tun2socks.exe
+    - assets/wintun.dll

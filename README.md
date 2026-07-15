@@ -12,7 +12,7 @@ A cross-platform Flutter client for [ByeDPI](https://github.com/hufrea/byedpi) �
 - 📡 Platform-aware proxy routing:
   - **Android:** VPN tunnel via `VpnService` + `tun2socks` (system-wide, no root)
   - **macOS:** Automatic Wi-Fi SOCKS5 proxy via `networksetup`
-  - **Windows:** Registry-based proxy via `reg.exe`
+  - **Windows:** Proxy mode (browser-only) or **VPN mode** (all traffic via tun2socks)
 - 📝 Real-time log viewer with color-coded output
 - 🎨 Premium dark-mode UI with glassmorphism design
 - 📱 Responsive layout — adapts to both mobile and desktop
@@ -52,6 +52,10 @@ All `byedpi` features work natively, including:
 - `--md5sig`, `--drop-sack` — fully supported
 
 Only `--transparent` (Linux TPROXY) is not available.
+
+**Two routing modes:**
+- **Proxy mode** (default) — sets system proxy via registry. Only affects browsers and apps that respect WinINET settings.
+- **VPN mode** — uses [tun2socks](https://github.com/xjasonlyu/tun2socks) + [wintun](https://www.wintun.net/) to create a virtual TUN adapter that captures ALL system traffic (games, Discord, Telegram, etc.). Requires Administrator privileges.
 
 ## Building
 
@@ -118,11 +122,22 @@ Only `--transparent` (Linux TPROXY) is not available.
    cd ../../../../../../
    ```
 
-3. **Run:**
+3. **Download VPN mode binaries (optional, for VPN mode):**
+   - Download `tun2socks-windows-amd64.zip` from [tun2socks releases](https://github.com/xjasonlyu/tun2socks/releases)
+   - Download `wintun.dll` from [wintun.net](https://www.wintun.net/)
+   - Place both in the `assets/` folder:
+     ```bash
+     cp tun2socks.exe assets/tun2socks.exe
+     cp wintun.dll assets/wintun.dll
+     ```
+
+4. **Run:**
    ```bash
    flutter pub get
    flutter run -d windows
    ```
+
+   > **Note:** VPN mode requires running as Administrator. Right-click your terminal or the app → "Run as administrator".
 
 ### Building Release
 
@@ -145,11 +160,12 @@ flutter build windows --release
 ### Desktop (macOS / Windows)
 1. The app extracts the bundled binary (`ciadpi_mac` or `ciadpi.exe`) to the app's data directory
 2. Launches it as a background process with the selected preset flags
-3. Configures system proxy:
+3. Configures traffic routing:
    - **macOS:** Wi-Fi SOCKS proxy via `networksetup`
-   - **Windows:** Internet Settings registry via `reg.exe`
-4. All traffic is routed through the local proxy, which applies DPI bypass techniques
-5. On disconnect, the proxy is killed and system settings are restored
+   - **Windows Proxy mode:** Internet Settings registry via `reg.exe` (browser-only)
+   - **Windows VPN mode:** Launches `tun2socks` → creates wintun TUN adapter → configures split routes (0.0.0.0/1 + 128.0.0.0/1) → all traffic flows through TUN → SOCKS5 proxy
+4. DPI bypass techniques are applied to outgoing packets
+5. On disconnect, the proxy is killed, tun2socks is stopped, and system settings/routes are restored
 
 ### Android
 1. The byedpi C engine runs in-process via JNI (`libbyedpi.so`)
@@ -177,8 +193,10 @@ Flutter UI ─► ProxyManager
   tun2socks        ├── TLS record fragmentation
    (VPN)           └── OOB data injection
         │          │          │
-  VPN tunnel   networksetup  reg.exe
-  (system-wide) (SOCKS proxy) (SOCKS proxy)
+  VPN tunnel   networksetup  ├── [Proxy] reg.exe
+  (system-wide) (SOCKS proxy)└── [VPN] tun2socks
+                                  + wintun TUN
+                                  (system-wide)
 ```
 
 ## Project Structure
@@ -205,7 +223,9 @@ ciadpi/
 │       └── ByeDpiVpnService.kt # VPN service implementation
 ├── assets/
 │   ├── ciadpi_mac              # Pre-compiled macOS binary
-│   └── ciadpi.exe              # Pre-compiled Windows binary
+│   ├── ciadpi.exe              # Pre-compiled Windows binary
+│   ├── tun2socks.exe           # Windows VPN mode (download separately)
+│   └── wintun.dll              # Windows TUN driver (download separately)
 └── ByeByeDPI/                  # Vendored byedpi C source code
     └── app/src/main/
         ├── cpp/byedpi/         # Core C engine sources

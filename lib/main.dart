@@ -267,6 +267,28 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
             ),
           ),
         ),
+        // VPN Mode toggle (Windows only)
+        if (Platform.isWindows) ...[
+          const SizedBox(height: 8),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            child: _GlassCard(
+              child: Row(
+                children: [
+                  Icon(Icons.vpn_lock_rounded,
+                      size: 16, color: Colors.white.withValues(alpha: 0.5)),
+                  const SizedBox(width: 10),
+                  Text('Mode',
+                      style: GoogleFonts.inter(
+                          fontSize: 13,
+                          color: Colors.white.withValues(alpha: 0.7))),
+                  const Spacer(),
+                  _buildModeToggle(),
+                ],
+              ),
+            ),
+          ),
+        ],
         const SizedBox(height: 12),
         // Presets header
         Padding(
@@ -469,6 +491,29 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
             ),
           ),
         ),
+
+        // VPN Mode toggle (Windows only)
+        if (Platform.isWindows) ...[
+          const SizedBox(height: 12),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 24),
+            child: _GlassCard(
+              child: Row(
+                children: [
+                  Icon(Icons.vpn_lock_rounded,
+                      size: 16, color: Colors.white.withValues(alpha: 0.5)),
+                  const SizedBox(width: 10),
+                  Text('Mode',
+                      style: GoogleFonts.inter(
+                          fontSize: 13,
+                          color: Colors.white.withValues(alpha: 0.7))),
+                  const Spacer(),
+                  _buildModeToggle(),
+                ],
+              ),
+            ),
+          ),
+        ],
 
         const SizedBox(height: 16),
 
@@ -699,6 +744,86 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     );
   }
 
+  Widget _buildModeToggle() {
+    final isVpn = _proxy.mode == ProxyMode.vpn;
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(8),
+        color: Colors.white.withValues(alpha: 0.04),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _modeButton(
+            label: 'Proxy',
+            icon: Icons.public,
+            selected: !isVpn,
+            color: const Color(0xFF6C63FF),
+            onTap: () => setState(() => _proxy.mode = ProxyMode.proxy),
+          ),
+          _modeButton(
+            label: 'VPN',
+            icon: Icons.vpn_lock_rounded,
+            selected: isVpn,
+            color: const Color(0xFF00D9FF),
+            onTap: () => setState(() => _proxy.mode = ProxyMode.vpn),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _modeButton({
+    required String label,
+    required IconData icon,
+    required bool selected,
+    required Color color,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: _proxy.status == ProxyStatus.disconnected ||
+              _proxy.status == ProxyStatus.error
+          ? onTap
+          : null,
+      child: MouseRegion(
+        cursor: _proxy.status == ProxyStatus.disconnected ||
+                _proxy.status == ProxyStatus.error
+            ? SystemMouseCursors.click
+            : SystemMouseCursors.basic,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(6),
+            color: selected ? color.withValues(alpha: 0.15) : Colors.transparent,
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon,
+                  size: 12,
+                  color: selected
+                      ? color
+                      : Colors.white.withValues(alpha: 0.3)),
+              const SizedBox(width: 4),
+              Text(
+                label,
+                style: GoogleFonts.inter(
+                  fontSize: 11,
+                  fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+                  color: selected
+                      ? color
+                      : Colors.white.withValues(alpha: 0.3),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildRightPanel() {
     return Column(
       children: [
@@ -784,8 +909,8 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
         // Subtitle
         Text(
           isConnected
-              ? Platform.isAndroid
-                  ? 'VPN active — port ${_proxy.port}'
+              ? (Platform.isAndroid || _proxy.mode == ProxyMode.vpn)
+                  ? 'VPN active — all traffic via port ${_proxy.port}'
                   : 'SOCKS5 on 127.0.0.1:${_proxy.port}'
               : isConnecting
                   ? 'Establishing connection...'
